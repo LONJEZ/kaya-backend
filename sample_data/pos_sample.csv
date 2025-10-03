@@ -1,0 +1,6 @@
+"""
+Date,Item,Quantity,Price,Total,Payment Method
+2025-10-01,iPhone 15 Pro,1,120000,120000,M-Pesa
+2025-10-01,Phone Case,2,1200,2400,Cash
+2025-10-02,Bluetooth Speaker,1,4500,4500,Card
+"""

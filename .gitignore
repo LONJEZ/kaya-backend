@@ -1,0 +1,13 @@
+# Python
+*.pyc
+__pycache__/
+venv/
+
+# Environment
+.env
+
+migrations
+
+media
+
+logs

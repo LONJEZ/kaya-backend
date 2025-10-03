@@ -1,0 +1,6 @@
+"""
+Receipt No.,Completion Time,Details,Transaction Status,Paid In,Withdrawn,Balance
+SLK1ABC123,01/10/2025 14:30:00,Received from John Doe 0712345678,Completed,5000,0,25000
+SLK2DEF456,01/10/2025 15:45:00,Sent to Jane Smith 0723456789,Completed,0,2000,23000
+SLK3GHI789,02/10/2025 09:15:00,Withdraw from Agent 12345,Completed,0,3000,20000
+"""
