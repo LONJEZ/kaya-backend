@@ -1,6 +1,11 @@
-"""
 Date,Item,Quantity,Price,Total,Payment Method
 2025-10-01,iPhone 15 Pro,1,120000,120000,M-Pesa
 2025-10-01,Phone Case,2,1200,2400,Cash
 2025-10-02,Bluetooth Speaker,1,4500,4500,Card
-"""
+2025-10-02,USB-C Cable,3,800,2400,Cash
+2025-10-03,Samsung Galaxy A54,1,45000,45000,M-Pesa
+2025-10-03,Screen Protector,5,500,2500,Cash
+2025-10-04,Laptop HP,1,65000,65000,Bank Transfer
+2025-10-04,Wireless Mouse,2,1500,3000,Cash
+2025-10-05,Headphones Sony,1,8500,8500,M-Pesa
+2025-10-05,Power Bank,2,3500,7000,Card

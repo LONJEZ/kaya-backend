@@ -5,7 +5,7 @@ from pathlib import Path
 import time
 import json
 
-BASE_URL = "http://localhost:8000"
+BASE_URL = "http://localhost:8007"
 
 
 def get_demo_token():
@@ -75,13 +75,15 @@ def main():
     print("⏳ Waiting for background processing...")
     time.sleep(3)
     
-    # Check status of uploads
+       # Check status of uploads
     print("\n" + "="*60)
     print("📊 Upload Results Summary")
     print("="*60)
     
     headers = {'Authorization': f'Bearer {token}'}
     
+    success = False  # track if any succeeded
+
     for filename, result in results:
         ingestion_id = result.get('ingestion_id')
         
@@ -92,6 +94,7 @@ def main():
             )
             
             if status_response.status_code == 200:
+                success = True
                 status = status_response.json()
                 print(f"\n{filename}:")
                 print(f"  Status: {status.get('status')}")
@@ -100,8 +103,12 @@ def main():
                 print(f"  Rows skipped: {status.get('rows_skipped', 0)}")
     
     print("\n" + "="*60)
-    print("✅ Sample data upload complete!")
+    if success:
+        print("✅ Sample data upload complete!")
+    else:
+        print("❌ No sample data was uploaded. Please check your server and try again.")
     print("="*60)
+
 
 
 if __name__ == "__main__":
