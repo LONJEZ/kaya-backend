@@ -1,72 +1,95 @@
-from fastapi import APIRouter, Depends, HTTPException
-from typing import List
-from datetime import datetime, timedelta
+from fastapi import APIRouter, Depends, HTTPException, Query
+from typing import List, Optional
 
 from app.models.schemas import (
     AnalyticsOverview,
     RevenueTrend,
     TopProduct,
-    Transaction
+    Transaction,
+    CategorySales
 )
 from app.auth import verify_token
-from app.utils.bigquery_client import bq_client
+from app.services.analytics_service import analytics_service
 
 router = APIRouter()
 
 
 @router.get("/overview", response_model=AnalyticsOverview)
-async def get_analytics_overview(token: dict = Depends(verify_token)):
+async def get_analytics_overview(
+    days: int = Query(30, ge=1, le=365),
+    token: dict = Depends(verify_token)
+):
     """Get analytics overview for dashboard"""
     user_id = token.get("sub")
     
-    # TODO: Implement real BigQuery queries in Phase 3
-    # For now, return mock data
-    return AnalyticsOverview(
-        total_revenue=328000.0,
-        total_expenses=145000.0,
-        profit_margin=55.8,
-        top_product="iPhone 15",
-        period="last_30_days"
-    )
+    try:
+        data = analytics_service.get_overview(user_id, days)
+        return AnalyticsOverview(**data)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/revenue-trends", response_model=List[RevenueTrend])
-async def get_revenue_trends(token: dict = Depends(verify_token)):
+async def get_revenue_trends(
+    months: int = Query(6, ge=1, le=12),
+    token: dict = Depends(verify_token)
+):
     """Get revenue trends over time"""
     user_id = token.get("sub")
     
-    # TODO: Implement real BigQuery queries
-    return [
-        RevenueTrend(month="Jan", revenue=45000),
-        RevenueTrend(month="Feb", revenue=52000),
-        RevenueTrend(month="Mar", revenue=48000),
-        RevenueTrend(month="Apr", revenue=61000),
-        RevenueTrend(month="May", revenue=55000),
-        RevenueTrend(month="Jun", revenue=67000),
-    ]
+    try:
+        return analytics_service.get_revenue_trends(user_id, months)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/top-products", response_model=List[TopProduct])
-async def get_top_products(token: dict = Depends(verify_token)):
+async def get_top_products(
+    limit: int = Query(10, ge=1, le=50),
+    token: dict = Depends(verify_token)
+):
     """Get top selling products"""
     user_id = token.get("sub")
     
-    # TODO: Implement real BigQuery queries
-    return [
-        TopProduct(name="iPhone 15 Pro", category="Electronics", sales=55000, quantity=5),
-        TopProduct(name="Laptop", category="Electronics", sales=45000, quantity=3),
-        TopProduct(name="Bluetooth Speaker", category="Electronics", sales=12000, quantity=15),
-    ]
+    try:
+        return analytics_service.get_top_products(user_id, limit)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/category-sales", response_model=List[CategorySales])
+async def get_category_sales(token: dict = Depends(verify_token)):
+    """Get sales breakdown by category"""
+    user_id = token.get("sub")
+    
+    try:
+        return analytics_service.get_sales_by_category(user_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/transactions", response_model=List[Transaction])
-async def get_transactions(token: dict = Depends(verify_token)):
-    """Get recent transactions"""
+async def get_transactions(
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    token: dict = Depends(verify_token)
+):
+    """Get recent transactions with pagination"""
     user_id = token.get("sub")
     
-    # TODO: Implement real BigQuery queries
-    return [
-        Transaction(id="1", date="2025-10-01", item="iPhone 15 Pro", amount=55000, method="M-Pesa"),
-        Transaction(id="2", date="2025-10-01", item="Laptop Repair", amount=8500, method="Cash"),
-        Transaction(id="3", date="2025-09-30", item="Bluetooth Speaker", amount=3200, method="Card"),
-    ]
+    try:
+        return analytics_service.get_transactions(user_id, limit, offset)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/payment-methods")
+async def get_payment_methods(token: dict = Depends(verify_token)):
+    """Get breakdown by payment method"""
+    user_id = token.get("sub")
+    
+    try:
+        return analytics_service.get_payment_methods_breakdown(user_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+

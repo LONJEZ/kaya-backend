@@ -4,6 +4,9 @@ from fastapi.security import HTTPBearer
 from contextlib import asynccontextmanager
 import logging
 from datetime import datetime
+from app.api import cache, advanced_analytics as adv_analytics
+from app.middleware.performance import PerformanceMiddleware
+import time
 
 from app.config import settings
 from app.api import analytics, chat, settings as settings_api
@@ -44,12 +47,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.add_middleware(PerformanceMiddleware)
+
 # Include routers
 app.include_router(analytics.router, prefix="/api/analytics", tags=["Analytics"])
 app.include_router(chat.router, prefix="/api/chat", tags=["Chat"])
 app.include_router(settings_api.router, prefix="/api/settings", tags=["Settings"])
 app.include_router(ingestion.router, prefix="/api/ingestion", tags=["Data Ingestion"])
 app.include_router(connectors.router, prefix="/api/connectors", tags=["Connectors"])
+app.include_router(cache.router, prefix="/api/cache", tags=["Cache Management"])
+app.include_router(adv_analytics.router, prefix="/api/analytics/advanced", tags=["Advanced Analytics"])
+
 
 
 

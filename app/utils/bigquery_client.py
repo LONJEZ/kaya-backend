@@ -120,6 +120,23 @@ class BigQueryClient:
         rows = [dict(row) for row in results]
         logger.info(f"Query returned {len(rows)} rows")
         return rows
+    
+    def query_with_params(self, query: str, params: List[tuple]) -> List[Dict[str, Any]]:
+        """Execute parameterized query"""
+        from google.cloud import bigquery
+        
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter(name, type_, value)
+                for name, type_, value in params
+            ]
+        )
+        
+        query_job = self.client.query(query, job_config=job_config)
+        results = query_job.result()
+        return [dict(row) for row in results]
+
+
 
 
 # Initialize client

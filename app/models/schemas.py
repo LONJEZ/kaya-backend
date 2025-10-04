@@ -91,5 +91,19 @@ class SyncRequest(BaseModel):
     force_full_sync: bool = False
 
 
+class CategorySales(BaseModel):
+    category: str
+    sales: float
+    count: int
+
+
+class AnalyticsOverview(BaseModel):
+    total_revenue: float
+    total_expenses: float
+    profit_margin: float
+    top_product: Optional[str] = None
+    revenue_growth: Optional[float] = None
+    period: str
+
 
 

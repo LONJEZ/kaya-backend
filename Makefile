@@ -38,3 +38,27 @@ clean:
 	rm -rf venv __pycache__ .pytest_cache
 	find . -type d -name "__pycache__" -exec rm -rf {} +
 	find . -type f -name "*.pyc" -delete
+
+.PHONY: phase3-demo phase3-test phase3-benchmark
+
+phase3-demo:
+	@echo "Running Phase 3 demo..."
+	@chmod +x demo_phase3.sh
+	@./demo_phase3.sh
+
+phase3-test:
+	@echo "Running Phase 3 tests..."
+	@python3 scripts/test_analytics.py
+	@python3 scripts/test_cache.py
+
+phase3-benchmark:
+	@echo "Running performance benchmarks..."
+	@python3 scripts/benchmark_analytics.py
+
+phase3-integration:
+	@echo "Running integration test..."
+	@python3 scripts/integration_test.py
+
+# Complete test suite
+test-all: phase3-test phase3-benchmark phase3-integration
+	@echo "✅ All tests complete"
