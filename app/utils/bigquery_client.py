@@ -1,7 +1,7 @@
 from google.cloud import bigquery
 from google.cloud.exceptions import NotFound
 from google.oauth2 import service_account
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import logging
 import os
 import tempfile
@@ -47,16 +47,11 @@ class BigQueryClient:
             logger.info(f"Created dataset {self.dataset_id}")
 
     def create_tables(self):
-        """Create all required tables with schemas"""
+        """Create required tables with schemas"""
         tables = [
             ("transactions", TRANSACTIONS_SCHEMA, TRANSACTIONS_PARTITIONING),
             ("products", PRODUCTS_SCHEMA, None),
             ("users", USERS_SCHEMA, None),
-
-            # 👇 Add ingestion source tables
-            ("sheets", TRANSACTIONS_SCHEMA, TRANSACTIONS_PARTITIONING),
-            ("mpesa", TRANSACTIONS_SCHEMA, TRANSACTIONS_PARTITIONING),
-            ("pos", TRANSACTIONS_SCHEMA, TRANSACTIONS_PARTITIONING),
         ]
 
         for table_name, schema, partitioning in tables:
@@ -107,6 +102,24 @@ class BigQueryClient:
                 job.result()  # Wait for the job to complete
 
         logger.info(f"Inserted {len(rows)} rows into {table_name} (batch load)")
+
+    def query(self, sql: str, params: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+        """Run a SQL query and return results as list of dicts."""
+        job_config = bigquery.QueryJobConfig()
+
+        if params:
+            job_config.query_parameters = [
+                bigquery.ScalarQueryParameter(name, "STRING", value)
+                for name, value in params.items()
+            ]
+
+        logger.info(f"Running query: {sql}")
+        query_job = self.client.query(sql, job_config=job_config)
+        results = query_job.result()
+
+        rows = [dict(row) for row in results]
+        logger.info(f"Query returned {len(rows)} rows")
+        return rows
 
 
 # Initialize client
