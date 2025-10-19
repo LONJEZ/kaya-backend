@@ -1,64 +1,58 @@
-.PHONY: help setup run test init-db load-data clean docker-build docker-run
+.PHONY: help setup install test clean run docker-build docker-run deploy
 
 help:
 	@echo "Kaya AI Backend - Available Commands"
 	@echo "====================================="
-	@echo "setup        - Install dependencies"
-	@echo "init-db      - Initialize BigQuery tables"
-	@echo "load-data    - Load sample data"
+	@echo "setup        - Setup Phase 6"
+	@echo "install      - Install dependencies"
 	@echo "run          - Start development server"
-	@echo "test         - Run API tests"
+	@echo "test         - Run all tests"
+	@echo "test-phase6  - Test Phase 6 features"
+	@echo "lint         - Lint code"
+	@echo "clean        - Clean generated files"
 	@echo "docker-build - Build Docker image"
-	@echo "docker-run   - Run with Docker Compose"
-	@echo "clean        - Remove generated files"
+	@echo "docker-run   - Run with Docker"
+	@echo "deploy       - Deploy to production"
+	@echo "health       - Check system health"
 
 setup:
-	python3 -m venv venv
-	. venv/bin/activate && pip install -r requirements.txt
+	chmod +x setup_phase6.sh
+	./setup_phase6.sh
 
-init-db:
-	python3 scripts/init_bigquery.py
-
-load-data:
-	python3 scripts/load_sample_data.py
+install:
+	pip install -r requirements.txt
 
 run:
 	uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
 test:
-	python3 scripts/test_api.py
+	pytest tests/ -v --cov=app
 
-docker-build:
-	docker build -t kaya-backend .
+test-phase6:
+	python3 scripts/test_advanced_analytics.py
+	python3 scripts/pre_launch_checklist.py http://localhost:8007
 
-docker-run:
-	docker-compose up -d
+lint:
+	black app/ --check
+	flake8 app/ --max-line-length=100
 
 clean:
-	rm -rf venv __pycache__ .pytest_cache
 	find . -type d -name "__pycache__" -exec rm -rf {} +
 	find . -type f -name "*.pyc" -delete
+	rm -rf .pytest_cache
+	rm -rf htmlcov
+	rm -rf .coverage
 
-.PHONY: phase3-demo phase3-test phase3-benchmark
+docker-build:
+	docker build -t kaya-backend:latest -f Dockerfile.prod .
 
-phase3-demo:
-	@echo "Running Phase 3 demo..."
-	@chmod +x demo_phase3.sh
-	@./demo_phase3.sh
+docker-run:
+	docker-compose -f docker-compose.prod.yml up -d
 
-phase3-test:
-	@echo "Running Phase 3 tests..."
-	@python3 scripts/test_analytics.py
-	@python3 scripts/test_cache.py
+deploy:
+	chmod +x launch.sh
+	./launch.sh
 
-phase3-benchmark:
-	@echo "Running performance benchmarks..."
-	@python3 scripts/benchmark_analytics.py
-
-phase3-integration:
-	@echo "Running integration test..."
-	@python3 scripts/integration_test.py
-
-# Complete test suite
-test-all: phase3-test phase3-benchmark phase3-integration
-	@echo "✅ All tests complete"
+health:
+	curl http://localhost:8007/health | jq
+	curl http://localhost:8007/api/monitoring/health/detailed | jq

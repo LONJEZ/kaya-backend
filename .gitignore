@@ -1,26 +1,46 @@
 # Python
-*.pyc
 __pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
 venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
 
 # Environment
 .env
+.env.local
+.env.production
 
-migrations
+# Google Cloud
+*.json
+credentials/
+service-account*.json
 
-media
+# Logs
+logs/
+*.log
 
-logs
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
 
-app/main.py.backup 
+# Docker
+docker-compose.override.yml
 
-row.json
-
-rows.json 
-
-
-token.txt
-
-.log 
-
- kaya-474008-09eac83d1bdb.json
+# Misc
+.DS_Store
+*.bak
+tmp/
+temp/
+demo_token.txt

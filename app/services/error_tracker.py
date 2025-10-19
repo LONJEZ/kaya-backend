@@ -39,7 +39,14 @@ class ErrorTracker:
         # Log error
         logger.error(
             f"Error tracked: {error_type} - {error_message}",
-            extra=error_record
+            extra={
+                "error_type": error_record["type"],
+                "error_msg": error_record["message"],  
+                "endpoint": error_record["endpoint"],
+                "user_id": error_record["user_id"],
+                "error_context": error_record["context"],
+                "error_timestamp": error_record["timestamp"]
+            }
         )
         
         # Keep only last 1000 errors

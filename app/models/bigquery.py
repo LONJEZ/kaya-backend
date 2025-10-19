@@ -39,6 +39,7 @@ PRODUCTS_SCHEMA = [
 USERS_SCHEMA = [
     {"name": "id", "type": "STRING", "mode": "REQUIRED"},
     {"name": "email", "type": "STRING", "mode": "REQUIRED"},
+    {"name": "password_hash", "type": "STRING", "mode": "REQUIRED"},  # NEW
     {"name": "business_name", "type": "STRING", "mode": "REQUIRED"},
     {"name": "full_name", "type": "STRING", "mode": "NULLABLE"},
     {"name": "currency", "type": "STRING", "mode": "REQUIRED"},
