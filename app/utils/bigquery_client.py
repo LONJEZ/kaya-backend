@@ -6,6 +6,7 @@ import logging
 import os
 import tempfile
 import json
+import base64
 
 from app.config import settings
 from app.models.bigquery import (
@@ -22,18 +23,50 @@ class BigQueryClient:
     """Wrapper for BigQuery operations"""
 
     def __init__(self):
-        # Expand env vars like $HOME if present
+        # First, check if we need to create credentials file from base64
         credentials_path = os.path.expandvars(settings.GOOGLE_APPLICATION_CREDENTIALS)
-
-        credentials = service_account.Credentials.from_service_account_file(
-            credentials_path
-        )
-
-        self.client = bigquery.Client(
-            project=settings.GCP_PROJECT_ID,
-            credentials=credentials
-        )
-        self.dataset_id = f"{settings.GCP_PROJECT_ID}.{settings.BIGQUERY_DATASET}"
+        
+        # If credentials file doesn't exist, create it from base64 env var
+        if not os.path.exists(credentials_path):
+            logger.info(f"Credentials file not found at {credentials_path}, creating from base64...")
+            base64_creds = os.getenv('GCP_CREDENTIALS_BASE64')
+            
+            if not base64_creds:
+                raise ValueError(
+                    "Credentials file not found and GCP_CREDENTIALS_BASE64 environment variable is not set. "
+                    "Please set GCP_CREDENTIALS_BASE64 or provide a credentials file."
+                )
+            
+            try:
+                # Decode base64 credentials
+                credentials_json = base64.b64decode(base64_creds).decode('utf-8')
+                
+                # Create directory if it doesn't exist
+                os.makedirs(os.path.dirname(credentials_path), exist_ok=True)
+                
+                # Write credentials to file
+                with open(credentials_path, 'w') as f:
+                    f.write(credentials_json)
+                
+                logger.info(f"✅ Successfully created credentials file at {credentials_path}")
+            except Exception as e:
+                raise ValueError(f"Failed to decode and write GCP credentials: {str(e)}")
+        
+        # Now load credentials from file
+        try:
+            credentials = service_account.Credentials.from_service_account_file(
+                credentials_path
+            )
+            
+            self.client = bigquery.Client(
+                project=settings.GCP_PROJECT_ID,
+                credentials=credentials
+            )
+            self.dataset_id = f"{settings.GCP_PROJECT_ID}.{settings.BIGQUERY_DATASET}"
+            
+            logger.info(f"✅ BigQuery client initialized successfully for project {settings.GCP_PROJECT_ID}")
+        except Exception as e:
+            raise ValueError(f"Failed to initialize BigQuery client: {str(e)}")
 
     def create_dataset(self):
         """Create dataset if it doesn't exist"""
@@ -135,8 +168,6 @@ class BigQueryClient:
         query_job = self.client.query(query, job_config=job_config)
         results = query_job.result()
         return [dict(row) for row in results]
-
-
 
 
 # Initialize client
