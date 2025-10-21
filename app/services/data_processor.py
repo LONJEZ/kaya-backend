@@ -1,297 +1,272 @@
+"""Enhanced data processor with flexible CSV parsing"""
+
 import csv
 import io
-from typing import List, Dict, Any
 from datetime import datetime
+from typing import Dict, List, Any
 import hashlib
-import uuid
 import logging
-
-from app.utils.bigquery_client import bq_client
+import re
 
 logger = logging.getLogger(__name__)
 
 
 class DataProcessor:
-    """Handles data parsing, normalization, and ingestion with idempotency"""
-
-    def __init__(self):
-        # Store ingestion status in memory
-        self.ingestion_status: Dict[str, Dict[str, Any]] = {}
-        self.processed_hashes = set()  # For idempotency
-
-    # -------------------------------
-    # CSV Parsing
-    # -------------------------------
-    def parse_csv(self, csv_text: str, source_type: str) -> List[Dict[str, Any]]:
-        """Parse CSV based on source type"""
-        reader = csv.DictReader(io.StringIO(csv_text))
-        rows = list(reader)
-
-        if source_type == "mpesa":
-            return self._parse_mpesa_csv(rows)
-        elif source_type == "pos":
-            return self._parse_pos_csv(rows)
-        else:  # sheets or generic
-            return self._parse_generic_csv(rows)
-
-    def _parse_mpesa_csv(self, rows: List[Dict]) -> List[Dict[str, Any]]:
-        parsed = []
-        for row in rows:
-            try:
-                parsed.append({
-                    'receipt_no': row.get('Receipt No.', ''),
-                    'completion_time': row.get('Completion Time', ''),
-                    'details': row.get('Details', ''),
-                    'status': row.get('Transaction Status', ''),
-                    'paid_in': float(row.get('Paid In', 0) or 0),
-                    'withdrawn': float(row.get('Withdrawn', 0) or 0),
-                    'balance': float(row.get('Balance', 0) or 0),
-                })
-            except Exception as e:
-                logger.warning(f"Skipping invalid M-Pesa row: {e}")
-        return parsed
-
-    def _parse_pos_csv(self, rows: List[Dict]) -> List[Dict[str, Any]]:
-        parsed = []
-        for row in rows:
-            try:
-                parsed.append({
-                    'date': row.get('Date', ''),
-                    'item': row.get('Item', ''),
-                    'quantity': int(row.get('Quantity', 1)),
-                    'price': float(row.get('Price', 0)),
-                    'total': float(row.get('Total', 0)),
-                    'payment_method': row.get('Payment Method', 'Cash'),
-                })
-            except Exception as e:
-                logger.warning(f"Skipping invalid POS row: {e}")
-        return parsed
-
-    def _parse_generic_csv(self, rows: List[Dict]) -> List[Dict[str, Any]]:
-        parsed = []
-        for row in rows:
-            try:
-                parsed_row = {}
-
-                for date_col in ['date', 'Date', 'transaction_date', 'Date of Transaction']:
-                    if date_col in row:
-                        parsed_row['date'] = row[date_col]
-                        break
-
-                for amt_col in ['amount', 'Amount', 'total', 'Total', 'price', 'Price']:
-                    if amt_col in row:
-                        parsed_row['amount'] = float(row[amt_col] or 0)
-                        break
-
-                for item_col in ['item', 'Item', 'description', 'Description', 'product', 'Product']:
-                    if item_col in row:
-                        parsed_row['item'] = row[item_col]
-                        break
-
-                for cat_col in ['category', 'Category', 'type', 'Type']:
-                    if cat_col in row:
-                        parsed_row['category'] = row[cat_col]
-                        break
-
-                for pay_col in ['payment_method', 'Payment Method', 'method', 'Method']:
-                    if pay_col in row:
-                        parsed_row['payment_method'] = row[pay_col]
-                        break
-
-                if parsed_row:
-                    parsed.append(parsed_row)
-            except Exception as e:
-                logger.warning(f"Skipping invalid row: {e}")
-        return parsed
-
-    # -------------------------------
-    # Normalization
-    # -------------------------------
-    def normalize_transactions(
-        self,
-        rows: List[Dict[str, Any]],
-        user_id: str,
-        source_type: str
-    ) -> List[Dict[str, Any]]:
-        normalized = []
-        for row in rows:
-            try:
-                row_hash = self._generate_hash(row)
-                if row_hash in self.processed_hashes:
-                    continue  # Skip duplicates
-
-                if source_type == "mpesa":
-                    normalized_row = self._normalize_mpesa(row, user_id)
-                elif source_type == "pos":
-                    normalized_row = self._normalize_pos(row, user_id)
-                else:
-                    normalized_row = self._normalize_generic(row, user_id, source_type)
-
-                if normalized_row:
-                    normalized.append(normalized_row)
-                    self.processed_hashes.add(row_hash)
-
-            except Exception as e:
-                logger.error(f"Normalization error: {e}")
-        return normalized
-
-    def _normalize_mpesa(self, row: Dict, user_id: str) -> Dict[str, Any]:
-        amount = row['paid_in'] if row['paid_in'] > 0 else row['withdrawn']
-        return {
-            'id': str(uuid.uuid4()),
-            'user_id': user_id,
-            'source': 'mpesa',
-            'amount': float(amount),
-            'currency': 'KES',
-            'date': self._parse_date(row['completion_time']),
-            'timestamp': self._parse_timestamp(row['completion_time']),
-            'category': self._categorize_mpesa(row['details']),
-            'item_name': row['details'],
-            'payment_method': 'M-Pesa',
-            'status': row['status'],
-            'metadata': {'receipt_no': row['receipt_no']},
-            'created_at': datetime.utcnow().isoformat(),
-        }
-
-    def _normalize_pos(self, row: Dict, user_id: str) -> Dict[str, Any]:
-        return {
-            'id': str(uuid.uuid4()),
-            'user_id': user_id,
-            'source': 'pos',
-            'amount': float(row['total']),
-            'currency': 'KES',
-            'date': self._parse_date(row['date']),
-            'timestamp': self._parse_timestamp(row['date']),
-            'category': 'Retail',
-            'item_name': row['item'],
-            'payment_method': row['payment_method'],
-            'status': 'completed',
-            'metadata': {'quantity': row['quantity'], 'unit_price': row['price']},
-            'created_at': datetime.utcnow().isoformat(),
-        }
-
-    def _normalize_generic(self, row: Dict, user_id: str, source: str) -> Dict[str, Any]:
-        return {
-            'id': str(uuid.uuid4()),
-            'user_id': user_id,
-            'source': source,
-            'amount': float(row.get('amount', 0)),
-            'currency': 'KES',
-            'date': self._parse_date(row.get('date', '')),
-            'timestamp': self._parse_timestamp(row.get('date', '')),
-            'category': row.get('category', 'Other'),
-            'item_name': row.get('item', 'N/A'),
-            'payment_method': row.get('payment_method', 'Unknown'),
-            'status': 'completed',
-            'metadata': {},
-            'created_at': datetime.utcnow().isoformat(),
-        }
-
-    # -------------------------------
-    # Helpers
-    # -------------------------------
-    def _generate_hash(self, row: Dict) -> str:
-        row_str = str(sorted(row.items()))
-        return hashlib.md5(row_str.encode()).hexdigest()
-
-    def _parse_date(self, date_str: str) -> str:
-        if not date_str:
-            return datetime.utcnow().date().isoformat()
+    """Process and normalize data from various sources"""
+    
+    # Column name mappings for flexible parsing
+    COLUMN_MAPPINGS = {
+        'date': ['date', 'Date', 'DATE', 'timestamp', 'Timestamp', 'time', 'Time', 
+                 'completion_time', 'Completion Time', 'transaction_date', 'Transaction Date'],
+        'amount': ['amount', 'Amount', 'AMOUNT', 'price', 'Price', 'total', 'Total', 
+                   'paid_in', 'Paid In', 'withdrawn', 'Withdrawn', 'value', 'Value'],
+        'item': ['item', 'Item', 'ITEM', 'product', 'Product', 'description', 'Description',
+                 'details', 'Details', 'name', 'Name', 'transaction_details', 'Transaction Details'],
+        'category': ['category', 'Category', 'CATEGORY', 'type', 'Type', 'class', 'Class'],
+        'payment_method': ['payment_method', 'Payment Method', 'method', 'Method', 
+                          'payment_type', 'Payment Type', 'mode', 'Mode'],
+        'receipt_no': ['receipt_no', 'Receipt No', 'receipt', 'Receipt', 'transaction_id', 
+                       'Transaction ID', 'id', 'ID']
+    }
+    
+    @staticmethod
+    def find_column(headers: List[str], field: str) -> str | None:
+        """Find actual column name from headers using mappings"""
+        possible_names = DataProcessor.COLUMN_MAPPINGS.get(field, [])
+        
+        # Exact match first
+        for header in headers:
+            if header in possible_names:
+                return header
+        
+        # Case-insensitive partial match
+        for header in headers:
+            header_lower = header.lower().strip()
+            for possible in possible_names:
+                if possible.lower() in header_lower:
+                    return header
+        
+        return None
+    
+    @staticmethod
+    def parse_date(date_str: str) -> datetime:
+        """Parse date from various formats"""
+        if not date_str or date_str.strip() == '':
+            return datetime.now()
+        
+        date_str = date_str.strip()
+        
+        # Common date formats to try
         formats = [
-            '%Y-%m-%d',
-            '%d/%m/%Y',
-            '%m/%d/%Y',
-            '%d-%m-%Y',
-            '%Y/%m/%d',
-            '%d/%m/%Y %H:%M:%S',
-            '%Y-%m-%d %H:%M:%S'
+            '%Y-%m-%d',           # 2024-01-15
+            '%m/%d/%Y',           # 01/15/2024
+            '%d/%m/%Y',           # 15/01/2024
+            '%Y/%m/%d',           # 2024/01/15
+            '%d-%m-%Y',           # 15-01-2024
+            '%d-%b-%Y',           # 15-Jan-2024
+            '%d %b %Y',           # 15 Jan 2024
+            '%d/%m/%Y %H:%M',     # 15/01/2024 14:30
+            '%Y-%m-%d %H:%M:%S',  # 2024-01-15 14:30:00
+            '%d/%m/%Y %H:%M:%S',  # 15/01/2024 14:30:00
         ]
+        
         for fmt in formats:
             try:
-                return datetime.strptime(date_str, fmt).date().isoformat()
-            except:
+                return datetime.strptime(date_str, fmt)
+            except ValueError:
                 continue
-        return datetime.utcnow().date().isoformat()
-
-    def _parse_timestamp(self, date_str: str) -> str:
-        if not date_str:
-            return datetime.utcnow().isoformat()
-        formats = [
-            '%Y-%m-%d %H:%M:%S',
-            '%d/%m/%Y %H:%M:%S',
-            '%Y-%m-%d',
-            '%d/%m/%Y'
-        ]
-        for fmt in formats:
-            try:
-                return datetime.strptime(date_str, fmt).isoformat()
-            except:
-                continue
-        return datetime.utcnow().isoformat()
-
-    def _categorize_mpesa(self, details: str) -> str:
-        details_lower = details.lower()
-        if any(word in details_lower for word in ['sent', 'transfer', 'paid']):
-            return 'Payment'
-        elif any(word in details_lower for word in ['received', 'deposit']):
-            return 'Income'
-        elif 'withdraw' in details_lower:
-            return 'Withdrawal'
-        else:
-            return 'Other'
-
-    # -------------------------------
-    # Ingestion
-    # -------------------------------
-    def process_and_ingest(
-        self,
-        ingestion_id: str,
-        user_id: str,
-        rows: List[Dict],
-        source_type: str
-    ):
-        """Process and ingest data to BigQuery (background task)"""
+        
+        # If all else fails, return current date
+        logger.warning(f"Could not parse date: {date_str}, using current date")
+        return datetime.now()
+    
+    @staticmethod
+    def parse_amount(amount_str: str) -> float:
+        """Parse amount from various formats"""
+        if not amount_str:
+            return 0.0
+        
+        # Remove currency symbols, commas, and whitespace
+        amount_str = str(amount_str).strip()
+        amount_str = re.sub(r'[KES$€£,\s]', '', amount_str)
+        
         try:
-            self.ingestion_status[ingestion_id] = {
-                'status': 'processing',
-                'rows_uploaded': len(rows),
-                'rows_processed': 0,
-                'rows_skipped': 0,
-                'error': None
-            }
-
-            # Normalize
-            normalized = self.normalize_transactions(rows, user_id, source_type)
-
-            # Batch insert to BigQuery
-            batch_size = 500
-            for i in range(0, len(normalized), batch_size):
-                batch = normalized[i:i + batch_size]
-                bq_client.insert_rows('transactions', batch)
-
-            self.ingestion_status[ingestion_id] = {
-                'status': 'completed',
-                'rows_uploaded': len(rows),
-                'rows_processed': len(normalized),
-                'rows_skipped': len(rows) - len(normalized),
-                'error': None
-            }
-
-            logger.info(f"Ingestion {ingestion_id} completed: {len(normalized)} rows")
-
+            return float(amount_str)
+        except ValueError:
+            logger.warning(f"Could not parse amount: {amount_str}")
+            return 0.0
+    
+    @staticmethod
+    def categorize_transaction(item: str, details: str = '') -> str:
+        """Auto-categorize transaction based on item description"""
+        text = f"{item} {details}".lower()
+        
+        # Electronics keywords
+        if any(word in text for word in ['phone', 'laptop', 'computer', 'tablet', 'tv', 
+                                          'electronics', 'camera', 'iphone', 'samsung']):
+            return 'Electronics'
+        
+        # Accessories keywords
+        if any(word in text for word in ['case', 'charger', 'cable', 'headphone', 'earphone',
+                                          'adapter', 'cover', 'screen protector']):
+            return 'Accessories'
+        
+        # Food keywords
+        if any(word in text for word in ['food', 'meal', 'lunch', 'dinner', 'breakfast',
+                                          'restaurant', 'cafe', 'snack']):
+            return 'Food & Beverage'
+        
+        # Services keywords
+        if any(word in text for word in ['service', 'repair', 'maintenance', 'consultation',
+                                          'delivery', 'shipping']):
+            return 'Services'
+        
+        # Default
+        return 'Other'
+    
+    @staticmethod
+    def parse_csv(content: bytes, source_type: str = 'csv') -> List[Dict[str, Any]]:
+        """Parse CSV content with flexible column mapping"""
+        try:
+            # Decode content
+            text = content.decode('utf-8-sig')  # Handles BOM
+            
+            # Parse CSV
+            reader = csv.DictReader(io.StringIO(text))
+            headers = reader.fieldnames or []
+            
+            if not headers:
+                raise ValueError("CSV has no headers")
+            
+            logger.info(f"CSV headers: {headers}")
+            
+            # Find column mappings
+            date_col = DataProcessor.find_column(headers, 'date')
+            amount_col = DataProcessor.find_column(headers, 'amount')
+            item_col = DataProcessor.find_column(headers, 'item')
+            category_col = DataProcessor.find_column(headers, 'category')
+            method_col = DataProcessor.find_column(headers, 'payment_method')
+            receipt_col = DataProcessor.find_column(headers, 'receipt_no')
+            
+            # Validate required columns
+            if not date_col and not receipt_col:
+                raise ValueError(
+                    f"CSV must contain a date/time column. Found columns: {', '.join(headers)}"
+                )
+            
+            if not amount_col:
+                raise ValueError(
+                    f"CSV must contain an amount column. Found columns: {', '.join(headers)}"
+                )
+            
+            logger.info(f"Column mapping - date: {date_col}, amount: {amount_col}, item: {item_col}")
+            
+            # Parse rows
+            transactions = []
+            skipped = 0
+            
+            for idx, row in enumerate(reader, start=2):  # Start at 2 (header is row 1)
+                try:
+                    # Extract date
+                    date_str = row.get(date_col, '') if date_col else ''
+                    date = DataProcessor.parse_date(date_str)
+                    
+                    # Extract amount
+                    amount_str = row.get(amount_col, '0')
+                    amount = DataProcessor.parse_amount(amount_str)
+                    
+                    if amount <= 0:
+                        logger.warning(f"Row {idx}: Invalid amount {amount_str}, skipping")
+                        skipped += 1
+                        continue
+                    
+                    # Extract item/description
+                    item = row.get(item_col, 'Unknown Item') if item_col else 'Unknown Item'
+                    if not item or item.strip() == '':
+                        item = 'Unknown Item'
+                    
+                    # Extract or infer category
+                    category = row.get(category_col, '') if category_col else ''
+                    if not category:
+                        category = DataProcessor.categorize_transaction(item)
+                    
+                    # Extract payment method
+                    method = row.get(method_col, 'Cash') if method_col else 'Cash'
+                    
+                    # Generate unique ID
+                    receipt_no = row.get(receipt_col, '') if receipt_col else ''
+                    unique_id = DataProcessor.generate_transaction_id(
+                        date, amount, item, receipt_no
+                    )
+                    
+                    transaction = {
+                        'id': unique_id,
+                        'date': date.strftime('%Y-%m-%d'),
+                        'timestamp': date.isoformat(),
+                        'item': item.strip(),
+                        'amount': amount,
+                        'category': category,
+                        'payment_method': method,
+                        'source_type': source_type,
+                        'receipt_no': receipt_no
+                    }
+                    
+                    transactions.append(transaction)
+                    
+                except Exception as e:
+                    logger.warning(f"Row {idx}: Error parsing - {str(e)}, skipping")
+                    skipped += 1
+                    continue
+            
+            if not transactions:
+                raise ValueError(
+                    f"No valid transactions found in CSV. "
+                    f"Processed {idx - 1} rows, skipped {skipped}. "
+                    f"Please check your data format."
+                )
+            
+            logger.info(f"Successfully parsed {len(transactions)} transactions, skipped {skipped}")
+            return transactions
+            
+        except UnicodeDecodeError:
+            raise ValueError("Unable to read CSV file. Please ensure it's saved as UTF-8")
+        except csv.Error as e:
+            raise ValueError(f"Invalid CSV format: {str(e)}")
         except Exception as e:
-            logger.error(f"Ingestion {ingestion_id} failed: {e}")
-            self.ingestion_status[ingestion_id] = {
-                'status': 'failed',
-                'rows_uploaded': len(rows),
-                'rows_processed': 0,
-                'rows_skipped': 0,
-                'error': str(e)
-            }
-
-    def get_status(self, ingestion_id: str):
-        """Retrieve ingestion status by ID"""
-        status = self.ingestion_status.get(ingestion_id)
-        if not status:
-            return None
-        return {"ingestion_id": ingestion_id, **status}
+            logger.error(f"CSV parsing error: {str(e)}")
+            raise ValueError(f"Failed to parse CSV: {str(e)}")
+    
+    @staticmethod
+    def generate_transaction_id(date: datetime, amount: float, 
+                                item: str, receipt_no: str = '') -> str:
+        """Generate unique transaction ID"""
+        if receipt_no:
+            return hashlib.md5(receipt_no.encode()).hexdigest()[:16]
+        
+        unique_str = f"{date.isoformat()}{amount}{item}"
+        return hashlib.md5(unique_str.encode()).hexdigest()[:16]
+    
+    @staticmethod
+    def normalize_for_bigquery(transactions: List[Dict[str, Any]], 
+                               user_id: str) -> List[Dict[str, Any]]:
+        """Normalize transactions for BigQuery insertion"""
+        normalized = []
+        
+        for txn in transactions:
+            normalized.append({
+                'id': txn['id'],
+                'user_id': user_id,
+                'date': txn['date'],
+                'timestamp': txn['timestamp'],
+                'item': txn['item'],
+                'amount': txn['amount'],
+                'category': txn['category'],
+                'payment_method': txn['payment_method'],
+                'source': txn['source_type'],
+                'metadata': {
+                    'receipt_no': txn.get('receipt_no', ''),
+                    'processed_at': datetime.now().isoformat()
+                }
+            })
+        
+        return normalized

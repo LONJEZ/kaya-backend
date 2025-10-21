@@ -1,3 +1,7 @@
+# ============================================================================
+# Kaya AI Backend - Requirements (Google AI Studio - FREE)
+# ============================================================================
+
 # Core Framework
 fastapi==0.109.0
 uvicorn[standard]==0.27.0
@@ -5,19 +9,22 @@ pydantic==2.5.3
 email-validator==2.1.0
 pydantic-settings==2.1.0
 
+# HTTP Client (for Gemini API Studio)
+requests>=2.31.0
+
 # Authentication
 python-jose[cryptography]==3.3.0
 python-multipart==0.0.6
 
-# Google Cloud
+# Google Cloud (BigQuery only - no Vertex AI!)
 google-cloud-bigquery==3.14.1
 google-cloud-secret-manager==2.17.0
-google-cloud-aiplatform==1.43.0
 
-# Vertex AI
-vertexai==1.43.0
+# ❌ REMOVED: Vertex AI (not needed with AI Studio)
+# google-cloud-aiplatform==1.43.0
+# vertexai==1.43.0
 
-# Search (optional)
+# Search (optional - for context retrieval)
 elasticsearch==8.11.1
 
 # Data Processing
@@ -39,4 +46,3 @@ httpx==0.25.2
 
 # Utilities
 colorama==0.4.6
-

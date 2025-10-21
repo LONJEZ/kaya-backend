@@ -7,10 +7,13 @@ from app.config import settings
 def setup_cors(app):
     """Configure CORS for production"""
     
+    # Get origins - support both ALLOWED_ORIGINS and CORS_ORIGINS
+    origins = getattr(settings, 'ALLOWED_ORIGINS', None) or settings.CORS_ORIGINS
+    
     # Production-ready CORS
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=settings.ALLOWED_ORIGINS,
+        allow_origins=origins,
         allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
         allow_headers=[
