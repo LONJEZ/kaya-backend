@@ -1,0 +1,44 @@
+version: '3.8'
+
+services:
+  kaya-backend:
+    build: .
+    container_name: kaya-api
+    ports:
+      - "8000:8000"
+    environment:
+      # GCP Configuration
+      - GCP_PROJECT_ID=${GCP_PROJECT_ID}
+      - GCP_CREDENTIALS_BASE64=${GCP_CREDENTIALS_BASE64}
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/credentials.json
+      - BIGQUERY_DATASET=${BIGQUERY_DATASET:-kaya_data}
+      
+      # Gemini AI
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.0-flash-exp}
+      
+      # App Settings
+      - ENVIRONMENT=production
+      - SECRET_KEY=${SECRET_KEY}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
+      
+      # Feature Flags
+      - ENABLE_CACHE=true
+      - ENABLE_AI_CHAT=true
+      - ENABLE_ADVANCED_ANALYTICS=true
+      
+      # CORS (adjust based on your frontend URL)
+      - CORS_ORIGINS=http://localhost:3000,https://kaya-ai.vercel.app
+      
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
