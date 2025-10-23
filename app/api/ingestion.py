@@ -11,7 +11,8 @@ from app.services.data_processor import DataProcessor
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-data_processor = DataProcessor()
+# In-memory status tracking (for demo - use Redis in production)
+ingestion_status_cache = {}
 
 
 @router.post("/upload/csv", response_model=IngestionStatus)
@@ -31,12 +32,12 @@ async def upload_csv(
         raise HTTPException(status_code=400, detail="Only CSV files are supported")
 
     try:
-        # Read CSV content as bytes (data_processor.parse_csv expects bytes)
+        # Read CSV content as bytes
         content = await file.read()
-        
         logger.info(f"[UPLOAD] Processing CSV: {file.filename}, size: {len(content)} bytes")
 
         # Parse and validate
+        data_processor = DataProcessor()
         rows = data_processor.parse_csv(content, source_type)
 
         if not rows:
@@ -45,6 +46,15 @@ async def upload_csv(
         # Generate ingestion ID
         ingestion_id = str(uuid.uuid4())
 
+        # Initialize status
+        ingestion_status_cache[ingestion_id] = {
+            "ingestion_id": ingestion_id,
+            "status": "processing",
+            "rows_uploaded": len(rows),
+            "rows_processed": 0,
+            "message": f"Processing {len(rows)} rows"
+        }
+
         # Log ingestion start
         logger.info(
             f"[UPLOAD] User={user_id} uploading {len(rows)} rows "
@@ -52,26 +62,68 @@ async def upload_csv(
         )
 
         # Process in background
-        background_tasks.add_task(
-            data_processor.process_and_ingest,
-            ingestion_id=ingestion_id,
-            user_id=user_id,
-            rows=rows,
-            source_type=source_type,
-        )
+        if background_tasks:
+            background_tasks.add_task(
+                process_and_ingest_task,
+                ingestion_id=ingestion_id,
+                user_id=user_id,
+                rows=rows,
+                source_type=source_type
+            )
+        else:
+            # Fallback: process synchronously
+            process_and_ingest_task(ingestion_id, user_id, rows, source_type)
 
         return IngestionStatus(
             ingestion_id=ingestion_id,
             status="processing",
             rows_uploaded=len(rows),
-            message=f"Processing {len(rows)} rows in background",
+            message=f"Processing {len(rows)} rows in background"
         )
 
     except HTTPException:
-        raise  # Re-raise HTTP exceptions
+        raise
     except Exception as e:
         logger.error(f"[UPLOAD] CSV upload error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to parse CSV: {str(e)}")
+
+
+def process_and_ingest_task(ingestion_id: str, user_id: str, rows: List[Dict[str, Any]], source_type: str):
+    """Background task to process and ingest data into BigQuery"""
+    try:
+        logger.info(f"[INGEST] Starting ingestion {ingestion_id} for user {user_id}")
+        
+        # Normalize for BigQuery
+        data_processor = DataProcessor()
+        normalized_rows = data_processor.normalize_for_bigquery(rows, user_id)
+        
+        logger.info(f"[INGEST] Normalized {len(normalized_rows)} rows, inserting into BigQuery...")
+        
+        # Insert into BigQuery
+        bq_client.insert_rows('transactions', normalized_rows)
+        
+        # Update status - SUCCESS
+        ingestion_status_cache[ingestion_id] = {
+            "ingestion_id": ingestion_id,
+            "status": "completed",
+            "rows_uploaded": len(rows),
+            "rows_processed": len(normalized_rows),
+            "message": f"Successfully processed {len(normalized_rows)} rows"
+        }
+        
+        logger.info(f"[INGEST] ✅ Completed ingestion {ingestion_id}: {len(normalized_rows)} rows inserted")
+        
+    except Exception as e:
+        logger.error(f"[INGEST] ❌ Failed ingestion {ingestion_id}: {str(e)}", exc_info=True)
+        
+        # Update status - FAILED
+        ingestion_status_cache[ingestion_id] = {
+            "ingestion_id": ingestion_id,
+            "status": "failed",
+            "rows_uploaded": len(rows),
+            "rows_processed": 0,
+            "message": f"Error: {str(e)}"
+        }
 
 
 @router.get("/status/{ingestion_id}", response_model=IngestionStatus)
@@ -80,13 +132,13 @@ async def get_ingestion_status(
     token: dict = Depends(verify_token),
 ):
     """Check status of data ingestion"""
-    status = data_processor.get_status(ingestion_id)
-
+    status = ingestion_status_cache.get(ingestion_id)
+    
     if not status:
         raise HTTPException(status_code=404, detail="Ingestion not found")
-
-    logger.info(f"[STATUS] Ingestion {ingestion_id} -> {status}")
-    return status
+    
+    logger.info(f"[STATUS] Ingestion {ingestion_id} -> {status['status']}")
+    return IngestionStatus(**status)
 
 
 @router.post("/sync/sheets")

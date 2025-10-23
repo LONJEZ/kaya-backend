@@ -235,29 +235,6 @@ class DataProcessor:
         except Exception as e:
             logger.error(f"CSV parsing error: {str(e)}")
             raise ValueError(f"Failed to parse CSV: {str(e)}")
-    
-    @staticmethod
-    def process_and_ingest(ingestion_id: str, user_id: str, 
-                          rows: List[Dict[str, Any]], source_type: str):
-        """Process and ingest data into BigQuery (background task)"""
-        try:
-            logger.info(f"[INGEST] Starting ingestion {ingestion_id} for user {user_id}")
-            
-            # Normalize for BigQuery
-            normalized_rows = DataProcessor.normalize_for_bigquery(rows, user_id)
-            
-            # Insert into BigQuery
-            from app.utils.bigquery_client import bq_client
-            bq_client.insert_rows('transactions', normalized_rows)
-            
-            logger.info(
-                f"[INGEST] Completed ingestion {ingestion_id}: "
-                f"{len(normalized_rows)} rows inserted"
-            )
-            
-        except Exception as e:
-            logger.error(f"[INGEST] Failed ingestion {ingestion_id}: {str(e)}", exc_info=True)
-            raise
 
     @staticmethod
     def generate_transaction_id(date: datetime, amount: float, 
