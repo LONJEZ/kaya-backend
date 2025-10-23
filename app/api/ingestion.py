@@ -132,6 +132,7 @@ async def get_ingestion_status(
     token: dict = Depends(verify_token),
 ):
     """Check status of data ingestion"""
+    # Use the cache directly instead of data_processor.get_status()
     status = ingestion_status_cache.get(ingestion_id)
     
     if not status:
