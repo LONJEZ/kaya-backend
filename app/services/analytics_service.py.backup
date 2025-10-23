@@ -92,7 +92,7 @@ class AnalyticsService:
             SAFE_DIVIDE((c.total_revenue - p.prev_revenue), p.prev_revenue) * 100 as revenue_growth
         FROM current_period c
         CROSS JOIN previous_period p
-        LEFT JOIN top_product t ON 1=1
+        CROSS JOIN top_product t
         """
         
         job_config = bigquery.QueryJobConfig(
@@ -104,29 +104,28 @@ class AnalyticsService:
         )
         
         results = list(self.client.query(query, job_config=job_config).result())
-        if not results or results[0]['total_revenue'] is None:
-            result = {
-                'total_revenue': 0.0,
-                'total_expenses': 0.0,
-                'profit_margin': 0.0,
-                'top_product': 'No data yet',
-                'revenue_growth': 0.0,
+        if not results:
+            return {
+                'total_revenue': 0,
+                'total_expenses': 0,
+                'profit_margin': 0,
+                'top_product': None,
                 'period': f'last_{days}_days'
             }
-        else:
-            row = results[0]
-            total_revenue = float(row['total_revenue'] or 0)
-            total_expenses = total_revenue * 0.45
-            profit_margin = ((total_revenue - total_expenses) / total_revenue * 100) if total_revenue > 0 else 0
-            
-            result = {
-                'total_revenue': total_revenue,
-                'total_expenses': total_expenses,
-                'profit_margin': round(profit_margin, 1),
-                'top_product': row['top_product'] or 'No data yet',
-                'revenue_growth': round(float(row['revenue_growth'] or 0), 1),
-                'period': f'last_{days}_days'
-            }
+        
+        row = results[0]
+        total_revenue = float(row['total_revenue'] or 0)
+        total_expenses = total_revenue * 0.45
+        profit_margin = ((total_revenue - total_expenses) / total_revenue * 100) if total_revenue > 0 else 0
+        
+        result = {
+            'total_revenue': total_revenue,
+            'total_expenses': total_expenses,
+            'profit_margin': round(profit_margin, 1),
+            'top_product': row['top_product'],
+            'revenue_growth': round(float(row['revenue_growth'] or 0), 1),
+            'period': f'last_{days}_days'
+        }
         
         if settings.ENABLE_CACHE:
             self.cache.set('overview', params, result)
@@ -160,18 +159,6 @@ class AnalyticsService:
         
         results = self.client.query(query, job_config=job_config).result()
         trends = [{'month': row['month'], 'revenue': float(row['revenue'])} for row in results]
-        
-        # Return default data if empty
-        if not trends:
-            # Generate last 6 months with zero revenue
-            current_date = datetime.utcnow().date()
-            trends = []
-            for i in range(months - 1, -1, -1):
-                month_date = current_date - timedelta(days=30 * i)
-                trends.append({
-                    'month': month_date.strftime('%b'),
-                    'revenue': 0.0
-                })
         
         if settings.ENABLE_CACHE:
             self.cache.set('revenue_trends', params, trends)
@@ -212,7 +199,6 @@ class AnalyticsService:
             for row in results
         ]
         
-        # Return empty list (frontend should handle this gracefully)
         if settings.ENABLE_CACHE:
             self.cache.set('top_products', params, products)
         return products
@@ -249,7 +235,6 @@ class AnalyticsService:
             for row in results
         ]
         
-        # Return empty list (frontend should handle this gracefully)
         if settings.ENABLE_CACHE:
             self.cache.set('sales_by_category', params, categories)
         return categories
@@ -296,7 +281,6 @@ class AnalyticsService:
             for row in results
         ]
         
-        # Return empty list (frontend should handle this gracefully)
         if settings.ENABLE_CACHE:
             self.cache.set('transactions', params, transactions)
         return transactions

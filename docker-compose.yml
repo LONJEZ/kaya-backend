@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   kaya-backend:
     build: .
@@ -15,7 +13,7 @@ services:
       
       # Gemini AI
       - GEMINI_API_KEY=${GEMINI_API_KEY}
-      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.0-flash-exp}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash}
       
       # App Settings
       - ENVIRONMENT=production
@@ -28,7 +26,7 @@ services:
       - ENABLE_ADVANCED_ANALYTICS=true
       
       # CORS (adjust based on your frontend URL)
-      - CORS_ORIGINS=http://localhost:3000,https://kaya-ai.vercel.app
+      #- CORS_ORIGINS=http://localhost:3000,https://kaya-ai.vercel.app
       
     restart: unless-stopped
     healthcheck:

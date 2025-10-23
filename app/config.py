@@ -51,6 +51,8 @@ class Settings(BaseSettings):
         "http://localhost:3001",
         "http://localhost:8000",
         "http://localhost:8007",
+        "https://kaya.africainfinityfoundation.org",
+        "https://kaya-api.africainfinityfoundation.org",
         "https://kaya-ai.vercel.app",
         "https://*.vercel.app",
     ]
