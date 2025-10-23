@@ -2,7 +2,7 @@
 
 import csv
 import io
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Any
 import hashlib
 import logging
@@ -21,7 +21,8 @@ class DataProcessor:
         'amount': ['amount', 'Amount', 'AMOUNT', 'price', 'Price', 'total', 'Total', 
                    'paid_in', 'Paid In', 'withdrawn', 'Withdrawn', 'value', 'Value'],
         'item': ['item', 'Item', 'ITEM', 'product', 'Product', 'description', 'Description',
-                 'details', 'Details', 'name', 'Name', 'transaction_details', 'Transaction Details'],
+                 'details', 'Details', 'name', 'Name', 'transaction_details', 'Transaction Details',
+                 'item/product'],
         'category': ['category', 'Category', 'CATEGORY', 'type', 'Type', 'class', 'Class'],
         'payment_method': ['payment_method', 'Payment Method', 'method', 'Method', 
                           'payment_type', 'Payment Type', 'mode', 'Mode'],
@@ -249,24 +250,52 @@ class DataProcessor:
     @staticmethod
     def normalize_for_bigquery(transactions: List[Dict[str, Any]], 
                                user_id: str) -> List[Dict[str, Any]]:
-        """Normalize transactions for BigQuery insertion"""
+        """
+        Normalize transactions for BigQuery insertion
+        ✅ Matches BigQuery schema EXACTLY
+        """
         normalized = []
+        now = datetime.now(timezone.utc)
         
         for txn in transactions:
-            normalized.append({
+            # Parse the datetime object from the transaction
+            if isinstance(txn.get('timestamp'), str):
+                try:
+                    txn_datetime = datetime.fromisoformat(txn['timestamp'].replace('Z', '+00:00'))
+                except:
+                    txn_datetime = DataProcessor.parse_date(txn.get('date', ''))
+            else:
+                txn_datetime = DataProcessor.parse_date(txn.get('date', ''))
+            
+            # Format dates for BigQuery
+            # DATE field: YYYY-MM-DD
+            date_formatted = txn_datetime.strftime('%Y-%m-%d')
+            
+            # TIMESTAMP field: YYYY-MM-DD HH:MM:SS (BigQuery will parse this correctly)
+            timestamp_formatted = txn_datetime.strftime('%Y-%m-%d %H:%M:%S')
+            
+            # CREATED_AT: Current timestamp
+            created_at_formatted = now.strftime('%Y-%m-%d %H:%M:%S')
+            
+            normalized_row = {
                 'id': txn['id'],
                 'user_id': user_id,
-                'date': txn['date'],
-                'timestamp': txn['timestamp'],
-                'item': txn['item'],
-                'amount': txn['amount'],
-                'category': txn['category'],
-                'payment_method': txn['payment_method'],
-                'source': txn['source_type'],
-                'metadata': {
+                'source': txn.get('source_type', 'csv'),
+                'amount': float(txn['amount']),
+                'currency': 'KES',  
+                'date': date_formatted, 
+                'timestamp': timestamp_formatted,  
+                'category': txn.get('category'),
+                'item_name': txn.get('item'),  
+                'payment_method': txn.get('payment_method'),
+                'status': 'completed',  
+                'metadata': txn.get('metadata', {
                     'receipt_no': txn.get('receipt_no', ''),
-                    'processed_at': datetime.now().isoformat()
-                }
-            })
+                    'processed_at': now.isoformat()
+                }),
+                'created_at': created_at_formatted 
+            }
+            
+            normalized.append(normalized_row)
         
         return normalized
