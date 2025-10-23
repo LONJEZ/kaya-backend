@@ -31,12 +31,13 @@ async def upload_csv(
         raise HTTPException(status_code=400, detail="Only CSV files are supported")
 
     try:
-        # Read CSV content
+        # Read CSV content as bytes (data_processor.parse_csv expects bytes)
         content = await file.read()
-        csv_text = content.decode("utf-8")
+        
+        logger.info(f"[UPLOAD] Processing CSV: {file.filename}, size: {len(content)} bytes")
 
         # Parse and validate
-        rows = data_processor.parse_csv(csv_text, source_type)
+        rows = data_processor.parse_csv(content, source_type)
 
         if not rows:
             raise HTTPException(status_code=400, detail="No valid data found in CSV")
@@ -66,9 +67,11 @@ async def upload_csv(
             message=f"Processing {len(rows)} rows in background",
         )
 
+    except HTTPException:
+        raise  # Re-raise HTTP exceptions
     except Exception as e:
         logger.error(f"[UPLOAD] CSV upload error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Failed to parse CSV: {str(e)}")
 
 
 @router.get("/status/{ingestion_id}", response_model=IngestionStatus)
