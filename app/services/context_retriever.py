@@ -1,250 +1,287 @@
-"""Retrieve relevant context for chat queries"""
+"""Google AI Studio Gemini integration - Enhanced for BigQuery context"""
 
-from typing import List, Dict, Any
+from typing import Dict, Any, List
+import json
 import logging
-
-from app.utils.bigquery_client import bq_client
+import requests
 from app.config import settings
 
 logger = logging.getLogger(__name__)
 
 
-class ContextRetriever:
-    """Retrieve relevant data context for queries"""
+class GeminiService:
+    """Generate conversational responses using Google AI Studio Gemini API"""
     
-    def retrieve_context(
-        self,
-        user_id: str,
-        query: str,
-        top_k: int = 5
-    ) -> List[Dict[str, Any]]:
-        """
-        Retrieve relevant context using hybrid search
+    def __init__(self):
+        self.model = settings.GEMINI_MODEL
+        self.base_url = "https://generativelanguage.googleapis.com/v1beta"
+        self.api_url = f"{self.base_url}/models/{self.model}:generateContent"
+        self.api_key = settings.GEMINI_API_KEY
         
-        Strategy:
-        1. Keyword matching on query
-        2. Recent data (time-weighted)
-        3. Aggregate statistics
-        """
-        
-        # Extract intent from query
-        query_lower = query.lower()
-        
-        # Determine context type
-        if any(word in query_lower for word in ['top', 'best', 'popular', 'selling']):
-            return self._get_top_products_context(user_id)
-        
-        elif any(word in query_lower for word in ['revenue', 'sales', 'money', 'earned']):
-            return self._get_revenue_context(user_id, query_lower)
-        
-        elif any(word in query_lower for word in ['category', 'categories']):
-            return self._get_category_context(user_id)
-        
-        elif any(word in query_lower for word in ['payment', 'mpesa', 'cash', 'method']):
-            return self._get_payment_context(user_id)
-        
-        elif any(word in query_lower for word in ['growth', 'trend', 'change', 'compare']):
-            return self._get_trend_context(user_id)
-        
+        if not self.api_key:
+            logger.warning("GEMINI_API_KEY not set. Chat will use fallback responses.")
         else:
-            # Default: overview context
-            return self._get_overview_context(user_id)
+            logger.info(f"✅ Gemini API initialized with model: {self.model}")
     
-    def _get_top_products_context(self, user_id: str) -> List[Dict[str, Any]]:
-        """Get top products data"""
-        query = f"""
-        SELECT 
-            item_name,
-            category,
-            SUM(amount) as total_sales,
-            COUNT(*) as transaction_count
-        FROM `{settings.GCP_PROJECT_ID}.{settings.BIGQUERY_DATASET}.transactions`
-        WHERE user_id = @user_id
-            AND date >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)
-        GROUP BY item_name, category
-        ORDER BY total_sales DESC
-        LIMIT 5
-        """
+    def generate_response(
+        self, 
+        query: str, 
+        context: List[Dict[str, Any]],
+        user_id: str
+    ) -> Dict[str, Any]:
+        """Generate AI response using Google AI Studio Gemini with BigQuery data"""
         
-        from google.cloud import bigquery
-        job_config = bigquery.QueryJobConfig(
-            query_parameters=[
-                bigquery.ScalarQueryParameter('user_id', 'STRING', user_id)
-            ]
-        )
+        if not self.api_key:
+            raise Exception("Gemini API key not configured")
         
-        results = bq_client.client.query(query, job_config=job_config).result()
-        
-        return [{
-            'type': 'top_products',
-            'data': [dict(row) for row in results]
-        }]
+        try:
+            # Build enhanced prompt with BigQuery context
+            prompt = self._build_enhanced_prompt(query, context)
+            
+            logger.info(f"🤖 Calling Gemini API: {self.model}")
+            response = requests.post(
+                f"{self.api_url}?key={self.api_key}",
+                headers={"Content-Type": "application/json"},
+                json={
+                    "contents": [{
+                        "parts": [{"text": prompt}]
+                    }],
+                    "generationConfig": {
+                        "temperature": 0.7,
+                        "topK": 40,
+                        "topP": 0.95,
+                        "maxOutputTokens": 2048,
+                    }
+                },
+                timeout=15
+            )
+            
+            if response.status_code != 200:
+                logger.error(f"Gemini API error: {response.status_code} - {response.text}")
+                raise Exception(f"Gemini API returned {response.status_code}")
+            
+            result = response.json()
+            
+            # Extract response text
+            if 'candidates' in result and len(result['candidates']) > 0:
+                content = result['candidates'][0]['content']
+                answer_text = content['parts'][0]['text']
+                
+                # Parse structured response
+                structured_response = self._parse_response(answer_text, context)
+                
+                return {
+                    'answer_text': structured_response['answer'],
+                    'confidence': structured_response['confidence'],
+                    'visualization': structured_response['visualization'],
+                    'structured': structured_response['structured']
+                }
+            else:
+                raise Exception("No response from Gemini")
+                
+        except requests.exceptions.Timeout:
+            logger.error("Gemini API timeout")
+            raise Exception("Gemini API timeout")
+        except Exception as e:
+            logger.error(f"Gemini service error: {str(e)}")
+            raise
     
-    def _get_revenue_context(self, user_id: str, query: str) -> List[Dict[str, Any]]:
-        """Get revenue data with time period detection"""
+    def _build_enhanced_prompt(self, query: str, context: List[Dict[str, Any]]) -> str:
+        """Build enhanced prompt with properly formatted BigQuery context"""
         
-        # Detect time period
-        if 'month' in query or 'last month' in query:
-            days = 30
-            period = 'last_month'
-        elif 'quarter' in query:
-            days = 90
-            period = 'last_quarter'
-        elif 'year' in query:
-            days = 365
-            period = 'last_year'
-        else:
-            days = 30
-            period = 'last_30_days'
+        # Format the BigQuery data into readable text
+        context_text = self._format_bigquery_context(context)
         
-        query_sql = f"""
-        WITH current_period AS (
-            SELECT SUM(amount) as revenue
-            FROM `{settings.GCP_PROJECT_ID}.{settings.BIGQUERY_DATASET}.transactions`
-            WHERE user_id = @user_id
-                AND date >= DATE_SUB(CURRENT_DATE(), INTERVAL @days DAY)
-        ),
-        previous_period AS (
-            SELECT SUM(amount) as prev_revenue
-            FROM `{settings.GCP_PROJECT_ID}.{settings.BIGQUERY_DATASET}.transactions`
-            WHERE user_id = @user_id
-                AND date >= DATE_SUB(CURRENT_DATE(), INTERVAL @days*2 DAY)
-                AND date < DATE_SUB(CURRENT_DATE(), INTERVAL @days DAY)
-        )
-        SELECT 
-            c.revenue,
-            p.prev_revenue,
-            SAFE_DIVIDE((c.revenue - p.prev_revenue), p.prev_revenue) * 100 as growth_percent
-        FROM current_period c
-        CROSS JOIN previous_period p
-        """
+        prompt = f"""You are Kaya AI, an intelligent business analytics assistant for small business owners in Africa.
+
+USER QUESTION: {query}
+
+BUSINESS DATA FROM DATABASE:
+{context_text}
+
+INSTRUCTIONS:
+1. Answer the question directly using the specific data provided above
+2. Use exact numbers from the data (format with commas: 125,000)
+3. Use KES for currency formatting
+4. Be conversational and encouraging
+5. Provide actionable insights based on the actual data
+6. If data shows growth, celebrate it; if declining, suggest improvements
+7. Keep responses concise but informative (2-4 sentences)
+
+IMPORTANT:
+- Only use data that is actually provided above
+- If no data is available for something, say so honestly
+- Be specific about time periods mentioned in the data
+- Highlight the most important insight first
+
+Your response:"""
         
-        from google.cloud import bigquery
-        job_config = bigquery.QueryJobConfig(
-            query_parameters=[
-                bigquery.ScalarQueryParameter('user_id', 'STRING', user_id),
-                bigquery.ScalarQueryParameter('days', 'INT64', days)
-            ]
-        )
-        
-        results = list(bq_client.client.query(query_sql, job_config=job_config).result())
-        
-        return [{
-            'type': 'revenue',
-            'period': period,
-            'data': dict(results[0]) if results else {}
-        }]
+        return prompt
     
-    def _get_category_context(self, user_id: str) -> List[Dict[str, Any]]:
-        """Get category breakdown"""
-        query = f"""
-        SELECT 
-            category,
-            SUM(amount) as sales,
-            COUNT(*) as transactions
-        FROM `{settings.GCP_PROJECT_ID}.{settings.BIGQUERY_DATASET}.transactions`
-        WHERE user_id = @user_id
-            AND date >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)
-        GROUP BY category
-        ORDER BY sales DESC
-        """
+    def _format_bigquery_context(self, context: List[Dict[str, Any]]) -> str:
+        """Format BigQuery context data into readable text for Gemini"""
         
-        from google.cloud import bigquery
-        job_config = bigquery.QueryJobConfig(
-            query_parameters=[
-                bigquery.ScalarQueryParameter('user_id', 'STRING', user_id)
-            ]
-        )
+        if not context:
+            return "No business data available yet."
         
-        results = bq_client.client.query(query, job_config=job_config).result()
+        formatted_sections = []
         
-        return [{
-            'type': 'categories',
-            'data': [dict(row) for row in results]
-        }]
+        for ctx in context:
+            ctx_type = ctx.get('type', 'unknown')
+            data = ctx.get('data', {})
+            
+            if ctx_type == 'overview':
+                total_trans = data.get('total_transactions', 0)
+                total_rev = data.get('total_revenue', 0)
+                avg_trans = data.get('avg_transaction', 0)
+                unique_prods = data.get('unique_products', 0)
+                
+                formatted_sections.append(f"""
+BUSINESS OVERVIEW (Last 30 days):
+- Total Transactions: {total_trans:,}
+- Total Revenue: KES {total_rev:,.2f}
+- Average Transaction: KES {avg_trans:,.2f}
+- Unique Products: {unique_prods}""")
+            
+            elif ctx_type == 'revenue':
+                period = ctx.get('period', 'period')
+                revenue = data.get('revenue', 0)
+                prev_revenue = data.get('prev_revenue', 0)
+                growth = data.get('growth_percent', 0)
+                
+                formatted_sections.append(f"""
+REVENUE ANALYSIS ({period.replace('_', ' ').title()}):
+- Current Period Revenue: KES {revenue:,.2f}
+- Previous Period Revenue: KES {prev_revenue:,.2f}
+- Growth Rate: {growth:+.1f}%""")
+            
+            elif ctx_type == 'top_products':
+                formatted_sections.append("\nTOP SELLING PRODUCTS:")
+                for i, product in enumerate(data[:5], 1):
+                    name = product.get('item_name', 'Unknown')
+                    category = product.get('category', 'N/A')
+                    sales = product.get('total_sales', 0)
+                    count = product.get('transaction_count', 0)
+                    formatted_sections.append(f"  {i}. {name} ({category}) - KES {sales:,.2f} from {count} sales")
+            
+            elif ctx_type == 'categories':
+                formatted_sections.append("\nSALES BY CATEGORY:")
+                for i, cat in enumerate(data[:5], 1):
+                    category = cat.get('category', 'Unknown')
+                    sales = cat.get('sales', 0)
+                    trans = cat.get('transactions', 0)
+                    formatted_sections.append(f"  {i}. {category}: KES {sales:,.2f} ({trans} transactions)")
+            
+            elif ctx_type == 'payment_methods':
+                formatted_sections.append("\nPAYMENT METHODS:")
+                for method in data:
+                    pm = method.get('payment_method', 'Unknown')
+                    count = method.get('count', 0)
+                    total = method.get('total', 0)
+                    formatted_sections.append(f"  - {pm}: {count} transactions, KES {total:,.2f}")
+            
+            elif ctx_type == 'trends':
+                if len(data) >= 2:
+                    formatted_sections.append("\nMONTHLY REVENUE TRENDS:")
+                    for month_data in data[-6:]:  # Last 6 months
+                        month = month_data.get('month', 'Unknown')
+                        revenue = month_data.get('revenue', 0)
+                        formatted_sections.append(f"  - {month}: KES {revenue:,.2f}")
+        
+        if not formatted_sections:
+            return "Limited business data available."
+        
+        return "\n".join(formatted_sections)
     
-    def _get_payment_context(self, user_id: str) -> List[Dict[str, Any]]:
-        """Get payment method breakdown"""
-        query = f"""
-        SELECT 
-            payment_method,
-            COUNT(*) as count,
-            SUM(amount) as total
-        FROM `{settings.GCP_PROJECT_ID}.{settings.BIGQUERY_DATASET}.transactions`
-        WHERE user_id = @user_id
-            AND date >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)
-        GROUP BY payment_method
-        ORDER BY total DESC
-        """
+    def _parse_response(self, answer_text: str, context: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Parse response and generate visualization if appropriate"""
         
-        from google.cloud import bigquery
-        job_config = bigquery.QueryJobConfig(
-            query_parameters=[
-                bigquery.ScalarQueryParameter('user_id', 'STRING', user_id)
-            ]
-        )
+        visualization = None
+        query_lower = answer_text.lower()
         
-        results = bq_client.client.query(query, job_config=job_config).result()
+        # Generate visualization from context data
+        if context:
+            viz_data = self._generate_visualization(context)
+            if viz_data:
+                visualization = viz_data
         
-        return [{
-            'type': 'payment_methods',
-            'data': [dict(row) for row in results]
-        }]
+        # Extract insights and recommendations
+        insights = []
+        recommendations = []
+        
+        lines = answer_text.split('\n')
+        for line in lines:
+            line_clean = line.strip('- •*').strip()
+            if not line_clean:
+                continue
+            
+            line_lower = line.lower()
+            if any(word in line_lower for word in ['increased', 'growing', 'improved', 'higher', 'up by', 'growth']):
+                insights.append(line_clean)
+            if any(word in line_lower for word in ['should', 'consider', 'recommend', 'try', 'focus', 'could', 'suggest']):
+                recommendations.append(line_clean)
+        
+        return {
+            'answer': answer_text,
+            'confidence': 0.9,  # High confidence with real BigQuery data
+            'visualization': visualization,
+            'structured': {
+                'insights': insights[:3] if insights else [],
+                'recommendations': recommendations[:3] if recommendations else []
+            }
+        }
     
-    def _get_trend_context(self, user_id: str) -> List[Dict[str, Any]]:
-        """Get trend data"""
-        query = f"""
-        SELECT 
-            FORMAT_DATE('%Y-%m', date) as month,
-            SUM(amount) as revenue
-        FROM `{settings.GCP_PROJECT_ID}.{settings.BIGQUERY_DATASET}.transactions`
-        WHERE user_id = @user_id
-            AND date >= DATE_SUB(CURRENT_DATE(), INTERVAL 6 MONTH)
-        GROUP BY month
-        ORDER BY month
-        """
+    def _generate_visualization(self, context: List[Dict[str, Any]]) -> Dict[str, Any] | None:
+        """Generate visualization from BigQuery context data"""
         
-        from google.cloud import bigquery
-        job_config = bigquery.QueryJobConfig(
-            query_parameters=[
-                bigquery.ScalarQueryParameter('user_id', 'STRING', user_id)
-            ]
-        )
+        for ctx in context:
+            ctx_type = ctx.get('type')
+            data = ctx.get('data', [])
+            
+            # Top products chart
+            if ctx_type == 'top_products' and isinstance(data, list) and len(data) >= 2:
+                chart_data = []
+                for product in data[:5]:
+                    chart_data.append({
+                        'name': product.get('item_name', 'Unknown'),
+                        'value': float(product.get('total_sales', 0))
+                    })
+                return {
+                    'type': 'bar_chart',
+                    'title': 'Top Products by Sales',
+                    'data': chart_data
+                }
+            
+            # Category breakdown
+            elif ctx_type == 'categories' and isinstance(data, list) and len(data) >= 2:
+                chart_data = []
+                for category in data:
+                    chart_data.append({
+                        'name': category.get('category', 'Unknown'),
+                        'value': float(category.get('sales', 0))
+                    })
+                return {
+                    'type': 'pie_chart',
+                    'title': 'Sales by Category',
+                    'data': chart_data
+                }
+            
+            # Revenue trends
+            elif ctx_type == 'trends' and isinstance(data, list) and len(data) >= 2:
+                chart_data = []
+                for month in data:
+                    chart_data.append({
+                        'month': month.get('month', 'Unknown'),
+                        'revenue': float(month.get('revenue', 0))
+                    })
+                return {
+                    'type': 'line_chart',
+                    'title': 'Revenue Trends',
+                    'data': chart_data
+                }
         
-        results = bq_client.client.query(query, job_config=job_config).result()
-        
-        return [{
-            'type': 'trends',
-            'data': [dict(row) for row in results]
-        }]
-    
-    def _get_overview_context(self, user_id: str) -> List[Dict[str, Any]]:
-        """Get general overview"""
-        query = f"""
-        SELECT 
-            COUNT(*) as total_transactions,
-            SUM(amount) as total_revenue,
-            AVG(amount) as avg_transaction,
-            COUNT(DISTINCT item_name) as unique_products
-        FROM `{settings.GCP_PROJECT_ID}.{settings.BIGQUERY_DATASET}.transactions`
-        WHERE user_id = @user_id
-            AND date >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)
-        """
-        
-        from google.cloud import bigquery
-        job_config = bigquery.QueryJobConfig(
-            query_parameters=[
-                bigquery.ScalarQueryParameter('user_id', 'STRING', user_id)
-            ]
-        )
-        
-        results = list(bq_client.client.query(query, job_config=job_config).result())
-        
-        return [{
-            'type': 'overview',
-            'data': dict(results[0]) if results else {}
-        }]
+        return None
 
 
-context_retriever = ContextRetriever()
-
+# Global instance
+gemini_service = GeminiService()
